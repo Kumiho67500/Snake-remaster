@@ -5,7 +5,11 @@ let rottenFood = [];
 let yellowFood = [];
 let flashingFood = [];
 let blueFood = [];
-let detachedSegments = [];
+let explosiveFood = [];
+
+let poop = []; // pour morceaux "morts" issus de pommes pourries (disparaissent)
+let snakePieces = []; // morceaux issus des bombes, posés au sol, récupérables
+
 let gameOver = false;
 let score = 0;
 let superSpeedFrames = 0;
@@ -43,10 +47,13 @@ function draw() {
   drawYellowFood();
   drawFlashingFood();
   drawBlueFood();
-  drawDetachedSegments();
+  drawExplosiveFood();
+  drawPoop();
+  drawSnakePieces();
   drawSnake();
   move();
-  updateDetachedSegments();
+  updatePoop();
+  updateSnakePieces();
 
   if (blueEffectFrames > 0) {
     blueEffectFrames--;
@@ -77,6 +84,7 @@ function draw() {
   if (random() < 0.005) placeYellowFood();
   if (random() < 0.002) placeFlashingFood();
   if (random() < 0.003) placeBlueFood();
+  if (random() < 0.002) placeExplosiveFood();
 }
 
 function drawGrid() {
@@ -112,9 +120,22 @@ function drawBlueFood() {
   for (let f of blueFood) rect(f[0], f[1], cellSize, cellSize);
 }
 
-function drawDetachedSegments() {
+function drawExplosiveFood() {
+  let c = frameCount % 20 < 10 ? 0 : 255;
+  fill(c);
+  for (let f of explosiveFood) rect(f[0], f[1], cellSize, cellSize);
+}
+
+function drawPoop() {
   fill(139, 69, 19);
   for (let s of detachedSegments) rect(s.x, s.y, cellSize, cellSize);
+}
+
+function drawSnakePieces() {
+  fill(0);
+  for (let s of collectibleSegments) {
+    rect(s.x, s.y, cellSize, cellSize);
+  }
 }
 
 function drawSnake() {
@@ -126,8 +147,22 @@ function drawSnake() {
   for (let s of snake) rect(s[0], s[1], cellSize, cellSize);
 }
 
-function updateDetachedSegments() {
+function updatePoop() {
   detachedSegments = detachedSegments.filter(s => --s.timer > 0);
+}
+
+function updateSnakePieces() {
+  for (let i = collectibleSegments.length - 1; i >= 0; i--) {
+    let seg = collectibleSegments[i];
+    if (seg.stepsLeft > 0) {
+      seg.x += seg.dx * cellSize;
+      seg.y += seg.dy * cellSize;
+      seg.stepsLeft--;
+    } else {
+      // immobile, posés au sol
+      // on ne fait rien ici, ils restent à cette position
+    }
+  }
 }
 
 function keyPressed() {
@@ -158,6 +193,13 @@ function move() {
     return;
   }
 
+  let collectedIndex = collectibleSegments.findIndex(s => s.x === newHead[0] && s.y === newHead[1]);
+  if (collectedIndex !== -1) {
+    collectibleSegments.splice(collectedIndex, 1);
+    snake.push([snake[snake.length - 1][0], snake[snake.length - 1][1]]); // agrandir serpent
+    score++;
+  }
+
   snake.unshift(newHead);
 
   if (eatFood(newHead, food)) {
@@ -172,12 +214,54 @@ function move() {
     superSpeedFrames = 50;
   } else if (eatFood(newHead, flashingFood)) {
     invincibleFrames = 150;
+  } else if (eatFood(newHead, explosiveFood)) {
+    explodeSnakePieces(newHead);
+    score++;
   } else if (detachedSegments.some(s => s.x === newHead[0] && s.y === newHead[1])) {
     detachedSegments = detachedSegments.filter(s => !(s.x === newHead[0] && s.y === newHead[1]));
     score = max(score - 1, 0);
   } else {
     snake.pop();
   }
+}
+
+function explodeSnakePieces(bombPos) {
+  let radius = 5 * cellSize;
+  let centerX = bombPos[0];
+  let centerY = bombPos[1];
+
+  let toExplode = [];
+  for (let i = 1; i < snake.length; i++) {
+    let seg = snake[i];
+    let dist = distSq(centerX, centerY, seg[0], seg[1]);
+    if (dist <= radius * radius) {
+      toExplode.push(seg);
+    }
+  }
+
+  snake = snake.filter(s => !toExplode.includes(s));
+
+  toExplode.forEach(seg => {
+    let angle = random(TWO_PI);
+    let dx = Math.round(cos(angle));
+    let dy = Math.round(sin(angle));
+    if (dx !== 0 && dy !== 0) {
+      if (random() < 0.5) dx = 0; else dy = 0;
+    }
+    collectibleSegments.push({
+      x: seg[0],
+      y: seg[1],
+      dx: dx,
+      dy: dy,
+      stepsLeft: 20
+    });
+  });
+}
+
+function distSq(x1, y1, x2, y2) {
+  let dx = x1 - x2;
+  let dy = y1 - y2;
+  return dx * dx + dy * dy;
 }
 
 function eatFood(head, list) {
@@ -209,6 +293,7 @@ function attractAllElementsTowardsSnake() {
   attract(yellowFood);
   attract(flashingFood);
   attract(blueFood);
+  attract(snakePieces);
   for (let i = 0; i < detachedSegments.length; i++) {
     let dx = snake[0][0] - detachedSegments[i].x;
     let dy = snake[0][1] - detachedSegments[i].y;
@@ -224,7 +309,8 @@ function randomEmptyCell() {
     y = floor(random(rows)) * cellSize;
   } while (
     snake.some(s => s[0] === x && s[1] === y) ||
-    food.concat(rottenFood, yellowFood, flashingFood, blueFood).some(f => f[0] === x && f[1] === y)
+    food.concat(rottenFood, yellowFood, flashingFood, blueFood, explosiveFood).some(f => f[0] === x && f[1] === y) ||
+    collectibleSegments.some(s => s.x === x && s.y === y)
   );
   return [x, y];
 }
@@ -249,6 +335,10 @@ function placeBlueFood() {
   blueFood.push(randomEmptyCell());
 }
 
+function placeExplosiveFood() {
+  explosiveFood.push(randomEmptyCell());
+}
+
 function resetGame() {
   snake = [
     [90, 90],
@@ -263,7 +353,9 @@ function resetGame() {
   yellowFood = [];
   flashingFood = [];
   blueFood = [];
+  explosiveFood = [];
   detachedSegments = [];
+  collectibleSegments = [];
   superSpeedFrames = 0;
   invincibleFrames = 0;
   blueEffectFrames = 0;
